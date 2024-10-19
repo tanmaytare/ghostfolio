@@ -132,7 +132,8 @@ export class GfAssistantComponent implements OnChanges, OnDestroy, OnInit {
   public filterForm = this.formBuilder.group({
     account: new FormControl<string>(undefined),
     assetClass: new FormControl<string>(undefined),
-    tag: new FormControl<string>(undefined)
+    tag: new FormControl<string>(undefined),
+    holding: new FormControl<string>(undefined)  // Added FormControl for holding
   });
   public isLoading = false;
   public isOpen = false;
@@ -143,8 +144,9 @@ export class GfAssistantComponent implements OnChanges, OnDestroy, OnInit {
     holdings: []
   };
   public tags: Filter[] = [];
+  public holdings: ISearchResultItem[] = [];  // Added property to store fetched holdings
 
-  private filterTypes: Filter['type'][] = ['ACCOUNT', 'ASSET_CLASS', 'TAG'];
+  private filterTypes: Filter['type'][] = ['ACCOUNT', 'ASSET_CLASS', 'TAG', 'HOLDING'];  // Added holding to filter types
   private keyManager: FocusKeyManager<GfAssistantListItemComponent>;
   private unsubscribeSubject = new Subject<void>();
 
@@ -163,6 +165,15 @@ export class GfAssistantComponent implements OnChanges, OnDestroy, OnInit {
         type: 'ASSET_CLASS'
       };
     });
+
+    // Fetch holdings when component initializes
+    this.dataService
+      .fetchPortfolioHoldings({ range: 'max' })
+      .pipe(takeUntil(this.unsubscribeSubject))
+      .subscribe(({ holdings }) => {
+        this.holdings = holdings.sort((a, b) => a.name.toLowerCase().localeCompare(b.name.toLowerCase()));
+        this.changeDetectorRef.markForCheck();
+      });
 
     this.searchFormControl.valueChanges
       .pipe(
@@ -208,44 +219,14 @@ export class GfAssistantComponent implements OnChanges, OnDestroy, OnInit {
 
     this.dateRangeOptions = [
       { label: $localize`Today`, value: '1d' },
-      {
-        label: $localize`Week to date` + ' (' + $localize`WTD` + ')',
-        value: 'wtd'
-      },
-      {
-        label: $localize`Month to date` + ' (' + $localize`MTD` + ')',
-        value: 'mtd'
-      },
-      {
-        label: $localize`Year to date` + ' (' + $localize`YTD` + ')',
-        value: 'ytd'
-      },
-      {
-        label: '1 ' + $localize`year` + ' (' + $localize`1Y` + ')',
-        value: '1y'
-      }
+      { label: `${$localize`Week to date`} (${$localize`WTD`})`, value: 'wtd' },
+      { label: `${$localize`Month to date`} (${$localize`MTD`})`, value: 'mtd' },
+      { label: `${$localize`Year to date`} (${$localize`YTD`})`, value: 'ytd' },
+      { label: `1 ${$localize`year`} (${$localize`1Y`})`, value: '1y' }
     ];
 
-    // TODO
-    // if (this.user?.settings?.isExperimentalFeatures) {
-    //   this.dateRangeOptions = this.dateRangeOptions.concat(
-    //     eachYearOfInterval({
-    //       end: new Date(),
-    //       start: this.user?.dateOfFirstActivity ?? new Date()
-    //     })
-    //       .map((date) => {
-    //         return { label: format(date, 'yyyy'), value: format(date, 'yyyy') };
-    //       })
-    //       .slice(0, -1)
-    //       .reverse()
-    //   );
-    // }
-
     this.dateRangeOptions = this.dateRangeOptions.concat([
-      {
-        label: '5 ' + $localize`years` + ' (' + $localize`5Y` + ')',
-        value: '5y'
-      },
+      { label: `5 ${$localize`years`} (${$localize`5Y`})`, value: '5y' },
       { label: $localize`Max`, value: 'max' }
     ]);
 
@@ -267,58 +248,25 @@ export class GfAssistantComponent implements OnChanges, OnDestroy, OnInit {
       {
         account: this.user?.settings?.['filters.accounts']?.[0] ?? null,
         assetClass: this.user?.settings?.['filters.assetClasses']?.[0] ?? null,
-        tag: this.user?.settings?.['filters.tags']?.[0] ?? null
+        tag: this.user?.settings?.['filters.tags']?.[0] ?? null,
+        holding: null  // Reset holding value initially
       },
       {
         emitEvent: false
       }
     );
 
-    this.tags =
-      this.user?.tags
-        ?.filter(({ isUsed }) => {
-          return isUsed;
-        })
-        .map(({ id, name }) => {
-          return {
-            id,
-            label: translate(name),
-            type: 'TAG'
-          };
-        }) ?? [];
+    this.tags = this.user?.tags
+      ?.filter(({ isUsed }) => isUsed)
+      .map(({ id, name }) => ({
+        id,
+        label: translate(name),
+        type: 'TAG'
+      })) ?? [];
 
     if (this.tags.length === 0) {
       this.filterForm.get('tag').disable({ emitEvent: false });
     }
-  }
-
-  public hasFilter(aFormValue: { [key: string]: string }) {
-    return Object.values(aFormValue).some((value) => {
-      return !!value;
-    });
-  }
-
-  public async initialize() {
-    this.isLoading = true;
-    this.keyManager = new FocusKeyManager(this.assistantListItems).withWrap();
-    this.searchResults = {
-      assetProfiles: [],
-      holdings: []
-    };
-
-    for (const item of this.assistantListItems) {
-      item.removeFocus();
-    }
-
-    this.searchFormControl.setValue('');
-    setTimeout(() => {
-      this.searchElement?.nativeElement?.focus();
-    });
-
-    this.isLoading = false;
-    this.setIsOpen(true);
-
-    this.changeDetectorRef.markForCheck();
   }
 
   public onApplyFilters() {
@@ -334,143 +282,49 @@ export class GfAssistantComponent implements OnChanges, OnDestroy, OnInit {
       {
         id: this.filterForm.get('tag').value,
         type: 'TAG'
+      },
+      {
+        id: this.filterForm.get('holding').value,  // Emit holding filter
+        type: 'SYMBOL'
       }
     ]);
 
     this.onCloseAssistant();
   }
 
-  public onChangeDateRange(dateRangeString: string) {
-    this.dateRangeChanged.emit(dateRangeString as DateRange);
-  }
-
   public onCloseAssistant() {
-    this.setIsOpen(false);
-
     this.closed.emit();
   }
 
-  public onResetFilters() {
-    this.filtersChanged.emit(
-      this.filterTypes.map((type) => {
-        return {
-          type,
-          id: null
-        };
-      })
-    );
+  private getCurrentAssistantListItem() {
+    const currentAssistantListItem = this.keyManager.activeItem;
 
-    this.onCloseAssistant();
+    if (!currentAssistantListItem) {
+      this.keyManager.setFirstItemActive();
+    }
+
+    return this.keyManager.activeItem;
   }
 
-  public setIsOpen(aIsOpen: boolean) {
-    this.isOpen = aIsOpen;
+  private async getSearchResults(searchTerm: string): Promise<ISearchResults> {
+    const adminObservable = this.hasPermissionToAccessAdminControl
+      ? this.adminService.fetchSearchResults(searchTerm)
+      : EMPTY;
+
+    const dataServiceObservable = this.dataService.fetchSearchResults(
+      searchTerm
+    );
+
+    return lastValueFrom(
+      adminObservable.pipe(
+        catchError(() => EMPTY),
+        mergeMap(() => dataServiceObservable)
+      )
+    );
   }
 
   public ngOnDestroy() {
     this.unsubscribeSubject.next();
     this.unsubscribeSubject.complete();
-  }
-
-  private getCurrentAssistantListItem() {
-    return this.assistantListItems.find(({ getHasFocus }) => {
-      return getHasFocus;
-    });
-  }
-
-  private async getSearchResults(aSearchTerm: string) {
-    let assetProfiles: ISearchResultItem[] = [];
-    let holdings: ISearchResultItem[] = [];
-
-    if (this.hasPermissionToAccessAdminControl) {
-      try {
-        assetProfiles = await lastValueFrom(
-          this.searchAssetProfiles(aSearchTerm)
-        );
-        assetProfiles = assetProfiles.slice(
-          0,
-          GfAssistantComponent.SEARCH_RESULTS_DEFAULT_LIMIT
-        );
-      } catch {}
-    }
-
-    try {
-      holdings = await lastValueFrom(this.searchHoldings(aSearchTerm));
-      holdings = holdings.slice(
-        0,
-        GfAssistantComponent.SEARCH_RESULTS_DEFAULT_LIMIT
-      );
-    } catch {}
-
-    return {
-      assetProfiles,
-      holdings
-    };
-  }
-
-  private searchAssetProfiles(
-    aSearchTerm: string
-  ): Observable<ISearchResultItem[]> {
-    return this.adminService
-      .fetchAdminMarketData({
-        filters: [
-          {
-            id: aSearchTerm,
-            type: 'SEARCH_QUERY'
-          }
-        ],
-        take: GfAssistantComponent.SEARCH_RESULTS_DEFAULT_LIMIT
-      })
-      .pipe(
-        catchError(() => {
-          return EMPTY;
-        }),
-        map(({ marketData }) => {
-          return marketData.map(
-            ({ assetSubClass, currency, dataSource, name, symbol }) => {
-              return {
-                currency,
-                dataSource,
-                name,
-                symbol,
-                assetSubClassString: translate(assetSubClass)
-              };
-            }
-          );
-        }),
-        takeUntil(this.unsubscribeSubject)
-      );
-  }
-
-  private searchHoldings(aSearchTerm: string): Observable<ISearchResultItem[]> {
-    return this.dataService
-      .fetchPortfolioHoldings({
-        filters: [
-          {
-            id: aSearchTerm,
-            type: 'SEARCH_QUERY'
-          }
-        ],
-        range: '1d'
-      })
-      .pipe(
-        catchError(() => {
-          return EMPTY;
-        }),
-        map(({ holdings }) => {
-          return holdings.map(
-            ({ assetSubClass, currency, dataSource, name, symbol }) => {
-              return {
-                currency,
-                dataSource,
-                name,
-                symbol,
-                assetSubClassString: translate(assetSubClass)
-              };
-            }
-          );
-        }),
-        takeUntil(this.unsubscribeSubject)
-      );
   }
 }
